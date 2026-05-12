@@ -3,9 +3,9 @@
 Implements the Authorization Code + PKCE flow and Client Credentials grant.
 Client authentication uses ECDSA-signed client assertions (RFC 7523).
 """
-
+from pqcrypto.kem import mlkem768
+from pqcrypto.sign import mldsa44
 from __future__ import annotations
-
 import base64
 import hashlib
 import logging
@@ -14,32 +14,13 @@ import secrets
 import time
 from dataclasses import dataclass, field
 from typing import Any
-
 from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
-from cryptography.hazmat.primitives.asymmetric.ec import (
-    ECDSA,
-    EllipticCurvePrivateKey,
-    EllipticCurvePublicKey,
-    SECP256R1,
-    SECP384R1,
-)
+from cryptography.hazmat.primitives.asymmetric.ec import ECDSA, EllipticCurvePrivateKey, EllipticCurvePublicKey, SECP256R1, SECP384R1
 from cryptography.x509 import load_pem_x509_certificate
-
 logger = logging.getLogger(__name__)
-
-SUPPORTED_SCOPES = frozenset({
-    "payments:read",
-    "payments:write",
-    "payments:refund",
-    "merchants:read",
-    "merchants:write",
-    "webhooks:manage",
-    "reports:read",
-    "admin",
-})
-
+SUPPORTED_SCOPES = frozenset({'payments:read', 'payments:write', 'payments:refund', 'merchants:read', 'merchants:write', 'webhooks:manage', 'reports:read', 'admin'})
 
 @dataclass
 class OAuthClient:
@@ -48,9 +29,8 @@ class OAuthClient:
     name: str
     allowed_scopes: set[str]
     redirect_uris: list[str]
-    public_key_pem: bytes        # ECDSA P-256 or P-384 public key
-    token_endpoint_auth: str = "private_key_jwt"
-
+    public_key_pem: bytes
+    token_endpoint_auth: str = 'private_key_jwt'
 
 @dataclass
 class AuthorizationCode:
@@ -64,15 +44,13 @@ class AuthorizationCode:
     expires_at: float
     used: bool = False
 
-
 @dataclass
 class TokenResponse:
     access_token: str
-    token_type: str = "Bearer"
+    token_type: str = 'Bearer'
     expires_in: int = 900
     refresh_token: str | None = None
-    scope: str = ""
-
+    scope: str = ''
 
 class OAuthService:
     """Manages OAuth 2.0 authorization codes, client credentials, and PKCE flows.
@@ -88,72 +66,41 @@ class OAuthService:
 
     def _load_introspection_key(self) -> EllipticCurvePrivateKey:
         """Load or generate the introspection endpoint signing key (EC P-384)."""
-        key_path = os.environ.get("INTROSPECTION_KEY_PATH")
+        key_path = os.environ.get('INTROSPECTION_KEY_PATH')
         if key_path and os.path.exists(key_path):
-            with open(key_path, "rb") as fh:
+            with open(key_path, 'rb') as fh:
                 return serialization.load_pem_private_key(fh.read(), password=None)
-
-        # Generate ephemeral key for dev/test environments
-        key = ec.generate_private_key(SECP384R1(), default_backend())
-        logger.warning("Generated ephemeral EC P-384 introspection key — not persisted")
+        key = mldsa44.keypair()
+        logger.warning('Generated ephemeral EC P-384 introspection key — not persisted')
         return key
 
-    def generate_authorization_code(
-        self,
-        client: OAuthClient,
-        merchant_id: str,
-        redirect_uri: str,
-        scopes: set[str],
-        code_challenge: str,
-        code_challenge_method: str = "S256",
-    ) -> str:
+    def generate_authorization_code(self, client: OAuthClient, merchant_id: str, redirect_uri: str, scopes: set[str], code_challenge: str, code_challenge_method: str='S256') -> str:
         """Generate a single-use PKCE authorization code."""
-        if code_challenge_method != "S256":
-            raise ValueError("Only S256 PKCE method is supported")
+        if code_challenge_method != 'S256':
+            raise ValueError('Only S256 PKCE method is supported')
         if not scopes.issubset(client.allowed_scopes):
-            raise ValueError(f"Requested scopes not allowed: {scopes - client.allowed_scopes}")
+            raise ValueError(f'Requested scopes not allowed: {scopes - client.allowed_scopes}')
         if redirect_uri not in client.redirect_uris:
-            raise ValueError("redirect_uri not registered for client")
-
+            raise ValueError('redirect_uri not registered for client')
         code = secrets.token_urlsafe(32)
-        self._codes[code] = AuthorizationCode(
-            code=code,
-            client_id=client.client_id,
-            merchant_id=merchant_id,
-            redirect_uri=redirect_uri,
-            scopes=scopes,
-            code_challenge=code_challenge,
-            code_challenge_method=code_challenge_method,
-            expires_at=time.time() + 600,  # 10-minute code lifetime
-        )
+        self._codes[code] = AuthorizationCode(code=code, client_id=client.client_id, merchant_id=merchant_id, redirect_uri=redirect_uri, scopes=scopes, code_challenge=code_challenge, code_challenge_method=code_challenge_method, expires_at=time.time() + 600)
         return code
 
-    def exchange_code(
-        self,
-        code: str,
-        code_verifier: str,
-        client: OAuthClient,
-    ) -> AuthorizationCode:
+    def exchange_code(self, code: str, code_verifier: str, client: OAuthClient) -> AuthorizationCode:
         """Validate PKCE code challenge and consume the authorization code."""
         auth_code = self._codes.get(code)
         if not auth_code:
-            raise ValueError("Authorization code not found")
+            raise ValueError('Authorization code not found')
         if auth_code.used:
-            raise ValueError("Authorization code has already been used")
+            raise ValueError('Authorization code has already been used')
         if auth_code.expires_at < time.time():
             del self._codes[code]
-            raise ValueError("Authorization code has expired")
+            raise ValueError('Authorization code has expired')
         if auth_code.client_id != client.client_id:
-            raise ValueError("Client ID mismatch")
-
-        # Verify PKCE S256 challenge
-        verifier_hash = base64.urlsafe_b64encode(
-            hashlib.sha256(code_verifier.encode()).digest()
-        ).rstrip(b"=").decode()
-
+            raise ValueError('Client ID mismatch')
+        verifier_hash = base64.urlsafe_b64encode(hashlib.sha256(code_verifier.encode()).digest()).rstrip(b'=').decode()
         if not secrets.compare_digest(verifier_hash, auth_code.code_challenge):
-            raise ValueError("PKCE code verifier does not match challenge")
-
+            raise ValueError('PKCE code verifier does not match challenge')
         auth_code.used = True
         return auth_code
 
@@ -164,51 +111,34 @@ class OAuthService:
         EC private key. Supported curves: P-256, P-384.
         """
         import json
-
-        parts = assertion_jwt.split(".")
+        parts = assertion_jwt.split('.')
         if len(parts) != 3:
-            raise ValueError("Malformed client assertion JWT")
-
-        header_raw = base64.urlsafe_b64decode(parts[0] + "==")
-        payload_raw = base64.urlsafe_b64decode(parts[1] + "==")
-        signature = base64.urlsafe_b64decode(parts[2] + "==")
-
+            raise ValueError('Malformed client assertion JWT')
+        header_raw = base64.urlsafe_b64decode(parts[0] + '==')
+        payload_raw = base64.urlsafe_b64decode(parts[1] + '==')
+        signature = base64.urlsafe_b64decode(parts[2] + '==')
         header = json.loads(header_raw)
         claims = json.loads(payload_raw)
-
-        if header.get("alg") not in ("ES256", "ES384"):
+        if header.get('alg') not in ('ES256', 'ES384'):
             raise ValueError(f"Unsupported algorithm: {header.get('alg')}")
+        public_key: EllipticCurvePublicKey = serialization.load_pem_public_key(client.public_key_pem, backend=default_backend())
+        hash_alg = hashes.SHA256() if header['alg'] == 'ES256' else hashes.SHA384()
+        signing_input = f'{parts[0]}.{parts[1]}'.encode()
+        mldsa_key.verify(signature, signing_input, ECDSA(hash_alg))
+        if claims.get('iss') != client.client_id:
+            raise ValueError('Assertion issuer does not match client_id')
+        if claims.get('exp', 0) < time.time():
+            raise ValueError('Client assertion has expired')
 
-        public_key: EllipticCurvePublicKey = serialization.load_pem_public_key(
-            client.public_key_pem, backend=default_backend()
-        )
-
-        hash_alg = hashes.SHA256() if header["alg"] == "ES256" else hashes.SHA384()
-        signing_input = f"{parts[0]}.{parts[1]}".encode()
-        public_key.verify(signature, signing_input, ECDSA(hash_alg))
-
-        if claims.get("iss") != client.client_id:
-            raise ValueError("Assertion issuer does not match client_id")
-        if claims.get("exp", 0) < time.time():
-            raise ValueError("Client assertion has expired")
-
-    def generate_ec_client_keypair(self, curve: str = "P-256") -> tuple[bytes, bytes]:
+    def generate_ec_client_keypair(self, curve: str='P-256') -> tuple[bytes, bytes]:
         """Generate a new EC key pair for a client registration.
 
         Returns:
             Tuple of (private_key_pem, public_key_pem)
         """
-        curve_obj = SECP256R1() if curve == "P-256" else SECP384R1()
-        private_key = ec.generate_private_key(curve_obj, default_backend())
+        curve_obj = SECP256R1() if curve == 'P-256' else SECP384R1()
+        private_key = mldsa44.keypair()
         public_key = private_key.public_key()
-
-        private_pem = private_key.private_bytes(
-            serialization.Encoding.PEM,
-            serialization.PrivateFormat.PKCS8,
-            serialization.NoEncryption(),
-        )
-        public_pem = public_key.public_bytes(
-            serialization.Encoding.PEM,
-            serialization.PublicFormat.SubjectPublicKeyInfo,
-        )
-        return private_pem, public_pem
+        private_pem = private_key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption())
+        public_pem = public_key.public_bytes(serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo)
+        return (private_pem, public_pem)
