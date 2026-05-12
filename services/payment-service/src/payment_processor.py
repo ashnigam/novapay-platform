@@ -6,6 +6,9 @@ non-repudiation and PCI DSS audit trail requirements.
 """
 
 from __future__ import annotations
+from pqc_crypto_helpers import mlkem768_hybrid_encrypt, mlkem768_hybrid_decrypt
+from pqcrypto.kem import ml_kem_768 as mlkem768
+from pqcrypto.sign import ml_dsa_44 as mldsa44
 
 import base64
 import hashlib
@@ -19,9 +22,8 @@ from typing import Optional
 from uuid import UUID, uuid4
 
 from cryptography.hazmat.backends import default_backend
-from cryptography.hazmat.primitives import hashes, serialization
-from cryptography.hazmat.primitives.asymmetric import ec, padding, rsa
-from cryptography.hazmat.primitives.asymmetric.ec import ECDSA, SECP256R1
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives.asymmetric.rsa import RSAPublicKey
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.primitives.padding import PKCS7
@@ -77,17 +79,14 @@ class PaymentProcessor:
                 vault_pem, backend=default_backend()
             )
         except Exception:
-            # Fallback: generate ephemeral RSA-4096 key for integration tests
-            _ephemeral = rsa.generate_private_key(
-                public_exponent=65537,
-                key_size=4096,
-                backend=default_backend(),
-            )
+            # Fallback: generate ephemeral ML-DSA-4096 key for integration tests
+            # PQC-CAVEAT: encaps emits sender-side only. Receiver must use mlkem768.decaps(ciphertext, sk). See docs/pqc/dh-to-kem.md
+            _public_key, _ephemeral = mlkem768.keypair()
             self._vault_public_key = _ephemeral.public_key()
             logger.warning("Using ephemeral RSA-4096 vault key — integration test mode only")
 
         # Transaction signing key — EC P-256 loaded from env or generated
-        self._signing_key = ec.generate_private_key(SECP256R1(), default_backend())
+        self._signing_key = mldsa44.keypair()
         logger.info("PaymentProcessor initialized with RSA-4096 vault key and EC P-256 signing key")
 
     def encrypt_card_data(self, card: CardData) -> dict[str, str]:
@@ -99,23 +98,9 @@ class PaymentProcessor:
         pan_bytes = card.pan.encode()
         cvv_bytes = card.cvv.encode()
 
-        encrypted_pan = self._vault_public_key.encrypt(
-            pan_bytes,
-            padding.OAEP(
-                mgf=padding.MGF1(algorithm=hashes.SHA256()),
-                algorithm=hashes.SHA256(),
-                label=None,
-            ),
-        )
+        encrypted_pan = mlkem768_hybrid_encrypt(self._vault_public_key, pan_bytes)
 
-        encrypted_cvv = self._vault_public_key.encrypt(
-            cvv_bytes,
-            padding.OAEP(
-                mgf=padding.MGF1(algorithm=hashes.SHA256()),
-                algorithm=hashes.SHA256(),
-                label=None,
-            ),
-        )
+        encrypted_cvv = mlkem768_hybrid_encrypt(self._vault_public_key, cvv_bytes)
 
         return {
             "encrypted_pan": base64.b64encode(encrypted_pan).decode(),
@@ -139,7 +124,7 @@ class PaymentProcessor:
             "timestamp": transaction.timestamp,
         }, sort_keys=True).encode()
 
-        signature = self._signing_key.sign(payload, ECDSA(hashes.SHA256()))
+        signature = mldsa44.sign(self._signing_key, payload)
         transaction.signature = signature
         return signature
 
@@ -162,7 +147,7 @@ class PaymentProcessor:
         }, sort_keys=True).encode()
 
         try:
-            public_key.verify(transaction.signature, payload, ECDSA(hashes.SHA256()))
+            mldsa44.verify(public_key, payload, transaction.signature)
             return True
         except Exception:
             return False
