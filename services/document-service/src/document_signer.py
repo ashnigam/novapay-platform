@@ -9,6 +9,7 @@ Verification: Public key distributed via KMS GetPublicKey + JWK endpoint.
 """
 
 from __future__ import annotations
+from pqcrypto.sign import ml_dsa_44 as mldsa44
 
 import base64
 import hashlib
@@ -21,15 +22,9 @@ from typing import Any
 
 import boto3
 from cryptography.hazmat.backends import default_backend
-from cryptography.hazmat.primitives import hashes, serialization
-from cryptography.hazmat.primitives.asymmetric import ec, rsa, padding
-from cryptography.hazmat.primitives.asymmetric.ec import ECDSA, SECP256R1, SECP384R1
+from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.rsa import (
-    RSAPrivateKey,
-    RSAPublicKey,
-    generate_private_key,
-)
-from cryptography.hazmat.primitives.asymmetric.padding import PSS, MGF1
+    RSAPrivateKey, RSAPublicKey, generate_private_key)
 
 logger = logging.getLogger(__name__)
 
@@ -145,12 +140,7 @@ class DocumentSigner:
         sig_bytes = base64.b64decode(signed.signature_b64)
 
         try:
-            public_key.verify(
-                sig_bytes,
-                digest,
-                PSS(mgf=MGF1(hashes.SHA256()), salt_length=PSS.MAX_LENGTH),
-                hashes.SHA256(),
-            )
+            mldsa44.verify(public_key, digest, sig_bytes)
             return True
         except Exception as exc:
             logger.error("Signature verification failed for %s: %s", signed.document_id, exc)
@@ -178,17 +168,8 @@ class LocalDocumentSigner:
 
     def sign(self, content: bytes) -> bytes:
         digest = hashlib.sha256(content).digest()
-        return self._private_key.sign(
-            digest,
-            PSS(mgf=MGF1(hashes.SHA256()), salt_length=PSS.MAX_LENGTH),
-            hashes.SHA256(),
-        )
+        return mldsa44.sign(self._private_key, digest)
 
     def verify(self, content: bytes, signature: bytes) -> None:
         digest = hashlib.sha256(content).digest()
-        self._private_key.public_key().verify(
-            signature,
-            digest,
-            PSS(mgf=MGF1(hashes.SHA256()), salt_length=PSS.MAX_LENGTH),
-            hashes.SHA256(),
-        )
+        mldsa44.verify(self._private_key.public_key(), digest, signature)
