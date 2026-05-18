@@ -1,0 +1,38 @@
+name: PQC Scan
+# Qryptive scans your code for quantum-vulnerable cryptography (RSA, ECC, DES, etc).
+# The scanner runs in this GitHub Actions runner — your code never leaves.
+# Findings appear as PR annotations and in the Security tab.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: '0 6 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: write
+  security-events: write
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: PQC scan
+        uses: qryptive/pqc-scanner-action@v1
+        with:
+          scan_scope: all
+          severity_threshold: medium
+          fail_on_vulnerable: false
+          report_format: sarif
+
+      - name: Upload findings to Security tab
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: pqc-results.sarif
+          category: qryptive-pqc
