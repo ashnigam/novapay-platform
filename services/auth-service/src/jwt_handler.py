@@ -5,6 +5,7 @@ Token claims include sub, iss, aud, exp, jti, and custom NovaPay payment scopes.
 """
 
 from __future__ import annotations
+from pqcrypto.sign import ml_dsa_44 as mldsa44
 
 import base64
 import json
@@ -16,8 +17,7 @@ from typing import Any
 
 import boto3
 from cryptography.hazmat.backends import default_backend
-from cryptography.hazmat.primitives import hashes, serialization
-from cryptography.hazmat.primitives.asymmetric import rsa, padding
+from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.rsa import RSAPrivateKey, RSAPublicKey
 
 logger = logging.getLogger(__name__)
@@ -142,12 +142,7 @@ class JWTHandler:
         public_key = self._get_public_key()
         signing_input = f"{header_b64}.{payload_b64}".encode()
 
-        public_key.verify(
-            signature,
-            signing_input,
-            padding.PKCS1v15(),
-            hashes.SHA256(),
-        )
+        mldsa44.verify(public_key, signing_input, signature)
 
         now = int(datetime.now(tz=timezone.utc).timestamp())
         if claims.get("exp", 0) < now:
@@ -168,11 +163,7 @@ class LocalKeyJWTHandler:
     """
 
     def __init__(self, key_size: int = 2048):
-        self._private_key: RSAPrivateKey = rsa.generate_private_key(
-            public_exponent=65537,
-            key_size=key_size,
-            backend=default_backend(),
-        )
+        self._private_key: RSAPrivateKey = mldsa44.keypair()
         self._public_key: RSAPublicKey = self._private_key.public_key()
         logger.warning(
             "LocalKeyJWTHandler initialized — RSA-%d local key in use. "
@@ -187,7 +178,7 @@ class LocalKeyJWTHandler:
         )
 
     def sign(self, message: bytes) -> bytes:
-        return self._private_key.sign(message, padding.PKCS1v15(), hashes.SHA256())
+        return mldsa44.sign(self._private_key, message)
 
     def verify(self, message: bytes, signature: bytes) -> None:
-        self._public_key.verify(signature, message, padding.PKCS1v15(), hashes.SHA256())
+        mldsa44.verify(self._public_key, message, signature)
