@@ -5,6 +5,7 @@ Client authentication uses ECDSA-signed client assertions (RFC 7523).
 """
 
 from __future__ import annotations
+from pqcrypto.sign import ml_dsa_44 as mldsa44
 
 import base64
 import hashlib
@@ -17,14 +18,8 @@ from typing import Any
 
 from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives import hashes, serialization
-from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives.asymmetric.ec import (
-    ECDSA,
-    EllipticCurvePrivateKey,
-    EllipticCurvePublicKey,
-    SECP256R1,
-    SECP384R1,
-)
+    EllipticCurvePrivateKey, EllipticCurvePublicKey, SECP256R1, SECP384R1)
 from cryptography.x509 import load_pem_x509_certificate
 
 logger = logging.getLogger(__name__)
@@ -94,7 +89,7 @@ class OAuthService:
                 return serialization.load_pem_private_key(fh.read(), password=None)
 
         # Generate ephemeral key for dev/test environments
-        key = ec.generate_private_key(SECP384R1(), default_backend())
+        _public_key, key = mldsa44.keypair()
         logger.warning("Generated ephemeral EC P-384 introspection key — not persisted")
         return key
 
@@ -185,7 +180,7 @@ class OAuthService:
 
         hash_alg = hashes.SHA256() if header["alg"] == "ES256" else hashes.SHA384()
         signing_input = f"{parts[0]}.{parts[1]}".encode()
-        public_key.verify(signature, signing_input, ECDSA(hash_alg))
+        mldsa44.verify(public_key, signing_input, signature)
 
         if claims.get("iss") != client.client_id:
             raise ValueError("Assertion issuer does not match client_id")
@@ -199,16 +194,8 @@ class OAuthService:
             Tuple of (private_key_pem, public_key_pem)
         """
         curve_obj = SECP256R1() if curve == "P-256" else SECP384R1()
-        private_key = ec.generate_private_key(curve_obj, default_backend())
-        public_key = private_key.public_key()
+        public_key, private_key = mldsa44.keypair()
 
-        private_pem = private_key.private_bytes(
-            serialization.Encoding.PEM,
-            serialization.PrivateFormat.PKCS8,
-            serialization.NoEncryption(),
-        )
-        public_pem = public_key.public_bytes(
-            serialization.Encoding.PEM,
-            serialization.PublicFormat.SubjectPublicKeyInfo,
-        )
+        private_pem = private_key
+        public_pem = public_key
         return private_pem, public_pem
