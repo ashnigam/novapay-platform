@@ -9,6 +9,7 @@ Memory: 512 MB (RSA verification overhead ~30 ms per event at 4096-bit keys)
 """
 
 from __future__ import annotations
+from pqcrypto.sign import ml_dsa_44 as mldsa44
 
 import base64
 import hashlib
@@ -21,9 +22,8 @@ from typing import Any
 
 import boto3
 from cryptography.hazmat.backends import default_backend
-from cryptography.hazmat.primitives import hashes, serialization
-from cryptography.hazmat.primitives.asymmetric import padding, rsa
-from cryptography.hazmat.primitives.asymmetric.rsa import RSAPrivateKey, RSAPublicKey
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric.rsa import RSAPublicKey
 
 logger = logging.getLogger(__name__)
 logger.setLevel(os.environ.get("LOG_LEVEL", "INFO"))
@@ -90,12 +90,7 @@ def verify_webhook_signature(
     signature = base64.b64decode(signature_b64)
 
     try:
-        public_key.verify(
-            signature,
-            payload,
-            padding.PKCS1v15(),
-            hashes.SHA256(),
-        )
+        mldsa44.verify(public_key, payload, signature)
         return True
     except Exception:
         logger.warning("Invalid webhook signature from sender %s", sender_id)
