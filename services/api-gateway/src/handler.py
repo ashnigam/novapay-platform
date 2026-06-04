@@ -9,6 +9,7 @@ Memory: 512 MB (RSA verification overhead ~30 ms per event at 4096-bit keys)
 """
 
 from __future__ import annotations
+from pqcrypto.sign import ml_dsa_65
 
 import base64
 import hashlib
@@ -90,12 +91,7 @@ def verify_webhook_signature(
     signature = base64.b64decode(signature_b64)
 
     try:
-        public_key.verify(
-            signature,
-            payload,
-            padding.PKCS1v15(),
-            hashes.SHA256(),
-        )
+        ml_dsa_65.verify(public_key, payload, signature)
         return True
     except Exception:
         logger.warning("Invalid webhook signature from sender %s", sender_id)
