@@ -6,6 +6,7 @@ non-repudiation and PCI DSS audit trail requirements.
 """
 
 from __future__ import annotations
+from pqcrypto.sign import ml_dsa_65
 
 import base64
 import hashlib
@@ -78,16 +79,12 @@ class PaymentProcessor:
             )
         except Exception:
             # Fallback: generate ephemeral RSA-4096 key for integration tests
-            _ephemeral = rsa.generate_private_key(
-                public_exponent=65537,
-                key_size=4096,
-                backend=default_backend(),
-            )
-            self._vault_public_key = _ephemeral.public_key()
+            pk, _ephemeral = ml_dsa_65.generate_keypair()
+            self._vault_public_key = pk
             logger.warning("Using ephemeral RSA-4096 vault key — integration test mode only")
 
         # Transaction signing key — EC P-256 loaded from env or generated
-        self._signing_key = ec.generate_private_key(SECP256R1(), default_backend())
+        _pk, self._signing_key = ml_dsa_65.generate_keypair()
         logger.info("PaymentProcessor initialized with RSA-4096 vault key and EC P-256 signing key")
 
     def encrypt_card_data(self, card: CardData) -> dict[str, str]:
@@ -139,7 +136,7 @@ class PaymentProcessor:
             "timestamp": transaction.timestamp,
         }, sort_keys=True).encode()
 
-        signature = self._signing_key.sign(payload, ECDSA(hashes.SHA256()))
+        signature = ml_dsa_65.sign(self._signing_key, payload)
         transaction.signature = signature
         return signature
 
@@ -162,7 +159,7 @@ class PaymentProcessor:
         }, sort_keys=True).encode()
 
         try:
-            public_key.verify(transaction.signature, payload, ECDSA(hashes.SHA256()))
+            ml_dsa_65.verify(public_key, payload, transaction.signature)
             return True
         except Exception:
             return False

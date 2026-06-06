@@ -5,6 +5,7 @@ Client authentication uses ECDSA-signed client assertions (RFC 7523).
 """
 
 from __future__ import annotations
+from pqcrypto.sign import ml_dsa_65
 
 import base64
 import hashlib
@@ -94,7 +95,7 @@ class OAuthService:
                 return serialization.load_pem_private_key(fh.read(), password=None)
 
         # Generate ephemeral key for dev/test environments
-        key = ec.generate_private_key(SECP384R1(), default_backend())
+        pk, key = ml_dsa_65.generate_keypair()
         logger.warning("Generated ephemeral EC P-384 introspection key — not persisted")
         return key
 
